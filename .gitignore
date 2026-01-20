@@ -1,8 +1,12 @@
 .gradle/
 .idea/
+.kotlin/
+.opencode/
 .run/
 build/
 kotlin-js-store/
 out/
 data*.json
 comments/
+.env
+AGENTS.md

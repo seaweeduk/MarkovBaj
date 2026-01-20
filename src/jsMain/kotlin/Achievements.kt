@@ -1,4 +1,3 @@
-import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
 
 data class Achievement(
@@ -16,7 +15,7 @@ data class Achievement(
 
 @Serializable
 data class CompletedAchievement(
-    val instant: Instant,
+    @Serializable(with = InstantSerializer::class) val instant: kotlin.time.Instant,
     val query: String,
     val response: String
 )

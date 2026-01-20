@@ -1,14 +1,14 @@
 
 import backend.setupBackendServer
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.datetime.Instant
+
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromStream
-import mu.KotlinLogging
 import java.io.File
 import kotlin.time.DurationUnit
 import kotlin.time.measureTime
@@ -16,7 +16,7 @@ import kotlin.time.measureTime
 private val logger = KotlinLogging.logger("MarkovBaj:General")
 
 suspend fun main() = coroutineScope {
-    logger.info { "Starting MarkovBaj Backend version ${BuildInfo.PROJECT_VERSION}, Build ${Instant.fromEpochMilliseconds(BuildInfo.PROJECT_BUILD_TIMESTAMP_MILLIS)}..." }
+    logger.info { "Starting MarkovBaj Backend version ${BuildInfo.PROJECT_VERSION}, Build ${kotlin.time.Instant.fromEpochMilliseconds(BuildInfo.PROJECT_BUILD_TIMESTAMP_MILLIS)}..." }
 
 
     val json = Json {
@@ -25,7 +25,7 @@ suspend fun main() = coroutineScope {
 
     val markovChain = MarkovChain<String?>(CommonConstants.consideredValuesForGeneration) { it?.trim() }
 
-    logger.info("Building Markov chain...")
+    logger.info { "Building Markov chain..." }
 
     val chainBuildTime = measureTime {
         val messages = json.decodeFromStream<List<String>>(File("data.json").inputStream())
@@ -42,7 +42,7 @@ suspend fun main() = coroutineScope {
         )
     }
 
-    logger.info("Building the chain took ${chainBuildTime.toDouble(DurationUnit.SECONDS)}s.")
+    logger.info { "Building the chain took ${chainBuildTime.toDouble(DurationUnit.SECONDS)}s." }
 
 
     val eventFlow = MutableSharedFlow<ApiEvent>(extraBufferCapacity = 1)
@@ -54,7 +54,7 @@ suspend fun main() = coroutineScope {
             setupRedditBot(redditClient!!, markovChain, eventFlow)
         }
     } else {
-        logger.warn("Reddit bot is not enabled.")
+        logger.warn { "Reddit bot is not enabled." }
     }
 
     if (RuntimeVariables.Discord.enabled) {
@@ -62,7 +62,7 @@ suspend fun main() = coroutineScope {
             setupDiscordBot(markovChain)
         }
     } else {
-        logger.warn("Discord bot is not enabled.")
+        logger.warn { "Discord bot is not enabled." }
     }
 
     if (RuntimeVariables.Twitch.enabled) {
@@ -70,7 +70,7 @@ suspend fun main() = coroutineScope {
             setupTwitchBot(markovChain)
         }
     } else {
-        logger.warn("Twitch bot is not enabled.")
+        logger.warn { "Twitch bot is not enabled." }
     }
 
     launch {

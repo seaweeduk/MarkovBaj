@@ -1,4 +1,5 @@
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.server.application.*
 import io.ktor.server.cio.*
 import io.ktor.server.engine.*
@@ -7,13 +8,24 @@ import io.ktor.server.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
-import kotlinx.datetime.Instant
+
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
-import mu.KotlinLogging
-import net.dean.jraw.RedditClient
+import reddit.RedditApiClient
+
+private object ApiInstantSerializer : KSerializer<kotlin.time.Instant> {
+    override val descriptor = PrimitiveSerialDescriptor("Instant", PrimitiveKind.LONG)
+
+    override fun deserialize(decoder: Decoder): kotlin.time.Instant = kotlin.time.Instant.fromEpochMilliseconds(decoder.decodeLong())
+    override fun serialize(encoder: Encoder, value: kotlin.time.Instant) = encoder.encodeLong(value.toEpochMilliseconds())
+}
 
 private val logger = KotlinLogging.logger("MarkovBaj:InternalApi")
 
@@ -49,7 +61,7 @@ sealed interface ApiEvent {
     ) : ApiEvent {
         @Serializable
         data class Comment(
-            val created: Instant,
+            @Serializable(with = ApiInstantSerializer::class) val created: kotlin.time.Instant,
             val distinguished: String,
             val id: String,
             val fullName: String,
@@ -72,7 +84,7 @@ sealed interface ApiEvent {
     ) : ApiEvent {
         @Serializable
         data class Submission(
-            val created: Instant,
+            @Serializable(with = ApiInstantSerializer::class) val created: kotlin.time.Instant,
             val distinguished: String,
             val id: String,
             val author: String,
@@ -99,66 +111,69 @@ sealed interface ApiEvent {
     }
 }
 
-fun setupBackendApiWebsocketServer(redditClient: RedditClient?, json: Json, eventFlow: Flow<ApiEvent>) {
+fun setupBackendApiWebsocketServer(redditClient: RedditApiClient?, json: Json, eventFlow: Flow<ApiEvent>) {
     embeddedServer(
         factory = CIO,
-        host = "127.0.0.1",
-        port = 14113,
-        module = {
-            install(WebSockets)
-
-            routing {
-                webSocket("/api/v1/oneshot") {
-                    logger.info { "Got /api/v1/oneshot connection." }
-
-                    try {
-                        for (frame in incoming) {
-                            try {
-                                when (val request = json.decodeFromString<OneShotBackendApiRequest>((frame as Frame.Text).readText())) {
-                                    is OneShotBackendApiRequest.PostRedditMessage -> {
-                                        if (redditClient != null) {
-                                            redditClient.comment(request.parentId).reply(request.content)
-                                            logger.info { "Commented '${request.content}' on comment ${request.parentId}." }
-                                            send(Json.encodeToString<OneShotBackendApiResponse>(OneShotBackendApiResponse.Success))
-                                        } else {
-                                            logger.warn { "Unable to comment as Reddit bot is not set up." }
-                                        }
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                logger.error(e) { "Error while handling one shot API request:" }
-                                send(Json.encodeToString<OneShotBackendApiResponse>(OneShotBackendApiResponse.Error(error = e.stackTraceToString())))
-                            }
-                        }
-
-                        close(CloseReason(CloseReason.Codes.NORMAL, "Message posted."))
-                    } catch (e: Exception) {
-                        logger.error(e) { "Error while handling one shot API request connection:" }
-                        close(CloseReason(CloseReason.Codes.NOT_CONSISTENT, "Error while handling one shot API request connection."))
-                    }
-
-                    logger.info { "/api/v1/oneshot connection disconnected." }
-                }
-
-                webSocket("/api/v1/events") {
-                    logger.info { "Got /api/v1/events connection." }
-
-                    try {
-                        eventFlow.collect {
-                            try {
-                                send(Frame.Text(Json.encodeToString(it)))
-                            } catch (e: CancellationException) {
-                                // This happens on every send even if it is successful for some reason, so just ignore it.
-                            }
-                        }
-                    } catch (e: Exception) {
-                        logger.error(e) { "Error while sending API event:" }
-                        close(CloseReason(CloseReason.Codes.NOT_CONSISTENT, "Error while sending API event."))
-                    }
-
-                    logger.info { "/api/v1/events connection disconnected." }
-                }
+        configure = {
+            connector {
+                host = "127.0.0.1"
+                port = 14113
             }
         }
-    ).start(wait = false)
+    ) {
+        install(WebSockets)
+
+        routing {
+            webSocket("/api/v1/oneshot") {
+                logger.info { "Got /api/v1/oneshot connection." }
+
+                try {
+                    for (frame in incoming) {
+                        try {
+                            when (val request = json.decodeFromString<OneShotBackendApiRequest>((frame as Frame.Text).readText())) {
+                                is OneShotBackendApiRequest.PostRedditMessage -> {
+                                    if (redditClient != null) {
+                                        redditClient.reply(request.parentId, request.content)
+                                        logger.info { "Commented '${request.content}' on comment ${request.parentId}." }
+                                        send(Json.encodeToString<OneShotBackendApiResponse>(OneShotBackendApiResponse.Success))
+                                    } else {
+                                        logger.warn { "Unable to comment as Reddit bot is not set up." }
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            logger.error(e) { "Error while handling one shot API request:" }
+                            send(Json.encodeToString<OneShotBackendApiResponse>(OneShotBackendApiResponse.Error(error = e.stackTraceToString())))
+                        }
+                    }
+
+                    close(CloseReason(CloseReason.Codes.NORMAL, "Message posted."))
+                } catch (e: Exception) {
+                    logger.error(e) { "Error while handling one shot API request connection:" }
+                    close(CloseReason(CloseReason.Codes.NOT_CONSISTENT, "Error while handling one shot API request connection."))
+                }
+
+                logger.info { "/api/v1/oneshot connection disconnected." }
+            }
+
+            webSocket("/api/v1/events") {
+                logger.info { "Got /api/v1/events connection." }
+
+                try {
+                    eventFlow.collect {
+                        try {
+                            send(Frame.Text(Json.encodeToString(it)))
+                        } catch (e: CancellationException) {
+                            // This happens on every send even if it is successful for some reason, so just ignore it.
+                        }
+                    }
+                } catch (e: Exception) {
+                    logger.error(e) { "Error while sending API event:" }
+                    close(CloseReason(CloseReason.Codes.NOT_CONSISTENT, "Error while sending API event."))
+                }
+
+                logger.info { "/api/v1/events connection disconnected." }
+            }
+        }
+    }.start(wait = false)
 }

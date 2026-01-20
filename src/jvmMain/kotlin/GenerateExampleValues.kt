@@ -1,5 +1,3 @@
-@file:OptIn(ExperimentalTime::class)
-
 package scripts
 
 import CommonConstants
@@ -7,12 +5,11 @@ import MarkovChain
 import generateRandomReply
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromStream
-import mu.KotlinLogging
+import io.github.oshai.kotlinlogging.KotlinLogging
 import toWordParts
 import tryGeneratingReplyFromWords
 import java.io.File
 import kotlin.time.DurationUnit
-import kotlin.time.ExperimentalTime
 import kotlin.time.measureTime
 
 fun main() {
@@ -24,7 +21,7 @@ fun main() {
 
     val markovChain = MarkovChain<String?>(CommonConstants.consideredValuesForGeneration) { it?.trim() }
 
-    logger.info("Building Markov chain...")
+    logger.info { "Building Markov chain..." }
 
     val chainBuildTime = measureTime {
         val messages = json.decodeFromStream<List<String>>(File("comments/data.json").inputStream())
@@ -41,9 +38,9 @@ fun main() {
         )
     }
 
-    logger.info("Building the chain took ${chainBuildTime.toDouble(DurationUnit.SECONDS)}s.")
+    logger.info { "Building the chain took ${chainBuildTime.toDouble(DurationUnit.SECONDS)}s." }
 
     repeat(100) {
-        logger.info(markovChain.generateRandomReply())
+        logger.info { markovChain.generateRandomReply() }
     }
 }

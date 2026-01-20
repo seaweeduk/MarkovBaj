@@ -2,14 +2,11 @@ package backend
 
 import io.ktor.server.application.*
 import io.ktor.server.html.*
-import io.ktor.util.pipeline.*
-import kotlinx.css.*
-import kotlinx.css.properties.border
-import kotlinx.datetime.Instant
 import kotlinx.html.*
 
-suspend fun PipelineContext<Unit, ApplicationCall>.lidlboards(
-    latestTableValuesUpdateInstant: Instant?,
+suspend fun lidlboards(
+    call: ApplicationCall,
+    latestTableValuesUpdateInstant: kotlin.time.Instant?,
     tableValues: Map<String, Pair<List<String>, List<List<String>>>>
 ) {
     call.respondHtml {
@@ -20,96 +17,84 @@ suspend fun PipelineContext<Unit, ApplicationCall>.lidlboards(
 
             style {
                 unsafe {
-                    +CssBuilder().apply {
-                        "body" {
-                            fontFamily = "Arial"
-                            margin(0.px)
-                            position = Position.relative
+                    +"""
+                        body {
+                            font-family: Arial;
+                            margin: 0;
+                            position: relative;
                         }
-
-                        "div.header" {
-                            position = Position.sticky
-                            top = 0.px
-                            backgroundColor = Color.cornflowerBlue
-                            color = Color.white
-                            display = Display.grid
-                            gridTemplateColumns = GridTemplateColumns(1.fr, 1.fr)
-                            gridTemplateRows = GridTemplateRows(1.fr)
-                            alignItems = Align.center
-                            paddingLeft = 32.px
-                            paddingRight = 32.px
-                            paddingTop = 16.px
-                            paddingBottom = 16.px
-                            wordBreak = WordBreak.breakWord
+                        div.header {
+                            position: sticky;
+                            top: 0;
+                            background-color: cornflowerblue;
+                            color: white;
+                            display: grid;
+                            grid-template-columns: 1fr 1fr;
+                            grid-template-rows: 1fr;
+                            align-items: center;
+                            padding-left: 32px;
+                            padding-right: 32px;
+                            padding-top: 16px;
+                            padding-bottom: 16px;
+                            word-break: break-word;
                         }
-
-                        "div.content" {
-                            padding(16.px)
-                            display = Display.flex
-                            gap = 16.px
-                            alignItems = Align.flexStart
-                            overflowX = Overflow.scroll
+                        div.content {
+                            padding: 16px;
+                            display: flex;
+                            gap: 16px;
+                            align-items: flex-start;
+                            overflow-x: scroll;
                         }
-
-                        "table" {
-                            minWidth = 500.px
-                            border(1.px, BorderStyle.solid, Color.black)
-                            borderCollapse = BorderCollapse.collapse
+                        table {
+                            min-width: 500px;
+                            border: 1px solid black;
+                            border-collapse: collapse;
                         }
-
-                        "button.expand-toggle" {
-                            margin(8.px)
-                            padding(8.px)
-                            flexShrink = 0
+                        button.expand-toggle {
+                            margin: 8px;
+                            padding: 8px;
+                            flex-shrink: 0;
                         }
-
-                        "table.collapsed tr:not(:first-child)" {
-                            display = Display.none
+                        table.collapsed tr:not(:first-child) {
+                            display: none;
                         }
-
-                        "tr" {
-                            border(1.px, BorderStyle.solid, Color.black)
+                        tr {
+                            border: 1px solid black;
                         }
-
-                        "th, td" {
-                            textAlign = TextAlign.left
-                            padding(8.px)
+                        th, td {
+                            text-align: left;
+                            padding: 8px;
                         }
-
-                        media("(max-width: 480px)") {
-                            "table" {
-                                width = 100.vw
-                                minWidth = LinearDimension.auto
-                                wordBreak = WordBreak.breakWord
-                                fontSize = 10.pt
+                        @media (max-width: 480px) {
+                            table {
+                                width: 100vw;
+                                min-width: auto;
+                                word-break: break-word;
+                                font-size: 10pt;
                             }
-
-                            "th, td" {
-                                padding(6.px)
+                            th, td {
+                                padding: 6px;
                             }
-
-                            "div.header" {
-                                gridTemplateColumns = GridTemplateColumns(1.fr)
-                                gridTemplateRows = GridTemplateRows("auto auto")
-                                justifyItems = JustifyItems.center
-                                paddingTop = 8.px
-                                paddingBottom = 8.px
+                            div.header {
+                                grid-template-columns: 1fr;
+                                grid-template-rows: auto auto;
+                                justify-items: center;
+                                padding-top: 8px;
+                                padding-bottom: 8px;
                             }
-
-                            "div.header div" {
-                                marginTop = 8.px
-                                marginBottom = 8.px
-                                put("text-align", "center !important")
+                            div.header div {
+                                margin-top: 8px;
+                                margin-bottom: 8px;
+                                text-align: center !important;
                             }
-
-                            "div.content" {
-                                padding(8.px)
-                                flexWrap = FlexWrap.wrap
-                                justifyItems = JustifyItems.center
-                                overflowX = Overflow.visible
+                            div.content {
+                                padding: 8px;
+                                flex-wrap: wrap;
+                                justify-items: center;
+                                overflow-x: visible;
                             }
                         }
-                    }.toString()
+                    """.trimIndent()
                 }
             }
 

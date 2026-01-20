@@ -3,6 +3,7 @@ import InstantSerializer
 import MarkovChain
 import RuntimeVariables
 import TableDefinition
+import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.client.*
 import io.ktor.http.*
 import io.ktor.resources.*
@@ -10,7 +11,7 @@ import io.ktor.server.application.*
 import io.ktor.server.auth.*
 import io.ktor.server.cio.*
 import io.ktor.server.engine.*
-import io.ktor.server.plugins.callloging.*
+import io.ktor.server.plugins.calllogging.*
 import io.ktor.server.plugins.cors.routing.*
 import io.ktor.server.plugins.statuspages.*
 import io.ktor.server.resources.*
@@ -21,18 +22,16 @@ import io.ktor.server.sessions.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.datetime.Clock
-import kotlinx.datetime.Instant
+
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import mu.KotlinLogging
-import net.dean.jraw.RedditClient
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.kotlin.datetime.KotlinInstantColumnType
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.slf4j.event.Level
+import reddit.RedditApiClient
 import java.io.PrintWriter
 import java.io.StringWriter
 import kotlin.time.Duration.Companion.minutes
@@ -41,7 +40,7 @@ import kotlin.time.Duration.Companion.minutes
 data class Session(
     val redditAccessToken: String,
     val redditRefreshToken: String?,
-    @Serializable(with = InstantSerializer::class) val redditAccessTokenExpiration: Instant,
+    @Serializable(with = InstantSerializer::class) val redditAccessTokenExpiration: kotlin.time.Instant,
 )
 
 object Routes {
@@ -86,18 +85,21 @@ val logger = KotlinLogging.logger("MarkovBaj:Backend")
 
 val redditLoginRedirectUrl = "${RuntimeVariables.Backend.serverUrl}/janitorbackend/callback"
 
-fun setupBackendServer(redditClient: RedditClient?, json: Json, markovChain: MarkovChain<String?>) {
+fun setupBackendServer(redditClient: RedditApiClient?, json: Json, markovChain: MarkovChain<String?>) {
     embeddedServer(
         factory = CIO,
-        host = "0.0.0.0",
-        port = RuntimeVariables.Backend.serverPort,
-        module = {
-            backendModule(redditClient, json, markovChain)
+        configure = {
+            connector {
+                host = "0.0.0.0"
+                port = RuntimeVariables.Backend.serverPort
+            }
         }
-    ).start(wait = true)
+    ) {
+        backendModule(redditClient, json, markovChain)
+    }.start(wait = true)
 }
 
-fun Application.backendModule(redditClient: RedditClient?, json: Json, markovChain: MarkovChain<String?>) {
+fun Application.backendModule(redditClient: RedditApiClient?, json: Json, markovChain: MarkovChain<String?>) {
     Database.connect(
         url = "jdbc:postgresql://${RuntimeVariables.Backend.databaseUrl}",
         driver = "org.postgresql.Driver",
@@ -107,23 +109,20 @@ fun Application.backendModule(redditClient: RedditClient?, json: Json, markovCha
 
     val tables = RuntimeVariables.Backend.databaseTables.associate { table ->
         table.displayName to (object : Table(table.name) { }).apply {
-            table.columns.forEach {
-                registerColumn<Any>(
-                    it.name,
-                    when (it.type) {
-                        TableDefinition.Column.Type.VarChar32 -> VarCharColumnType()
-                        TableDefinition.Column.Type.Text -> TextColumnType()
-                        TableDefinition.Column.Type.Integer -> IntegerColumnType()
-                        TableDefinition.Column.Type.Boolean -> BooleanColumnType()
-                        TableDefinition.Column.Type.Timestamp -> KotlinInstantColumnType()
-                    }
-                )
+            table.columns.forEach { col ->
+                when (col.type) {
+                    TableDefinition.Column.Type.VarChar32 -> registerColumn<String>(col.name, VarCharColumnType())
+                    TableDefinition.Column.Type.Text -> registerColumn<String>(col.name, TextColumnType())
+                    TableDefinition.Column.Type.Integer -> registerColumn<Int>(col.name, IntegerColumnType())
+                    TableDefinition.Column.Type.Boolean -> registerColumn<Boolean>(col.name, BooleanColumnType())
+                    TableDefinition.Column.Type.Timestamp -> registerColumn<kotlin.time.Instant>(col.name, KotlinInstantColumnType())
+                }
             }
          }
     }
 
     var tableValues: Map<String, Pair<List<String>, List<List<String>>>> = mapOf()
-    var latestTableValuesUpdateInstant: Instant? = null
+    var latestTableValuesUpdateInstant: kotlin.time.Instant? = null
 
     launch {
         while (isActive) {
@@ -134,13 +133,13 @@ fun Application.backendModule(redditClient: RedditClient?, json: Json, markovCha
                     tableDefinition.displayName to (
                         tableDefinition.columns.map { it.displayName } to
                         actualTable.selectAll().limit(RuntimeVariables.Backend.databaseTableRowLimit).map { row ->
-                            actualTable.columns.map { row[it]!!.toString() }
+                            actualTable.columns.map { row[it]?.toString() ?: "" }
                         }
                     )
                 }
             }
 
-            latestTableValuesUpdateInstant = Clock.System.now()
+            latestTableValuesUpdateInstant = kotlin.time.Clock.System.now()
 
             delay(10.minutes)
         }
@@ -199,7 +198,7 @@ fun Application.backendModule(redditClient: RedditClient?, json: Json, markovCha
 
     routing {
         get<Routes.JanitorBackend> {
-            janitorBackendLogin()
+            janitorBackendLogin(call)
         }
 
         authenticate(redditOAuthName) {
@@ -208,28 +207,28 @@ fun Application.backendModule(redditClient: RedditClient?, json: Json, markovCha
             }
 
             get<Routes.JanitorBackend.Callback> {
-                janitorBackendCallback()
+                janitorBackendCallback(call)
             }
         }
 
         get<Routes.JanitorBackend.Manage> {
-            janitorBackendManage()
+            janitorBackendManage(call)
         }
 
         get<Routes.JanitorBackend.DeleteComment> {
-            janitorBackendDeleteComment(redditClient, it)
+            janitorBackendDeleteComment(call, redditClient, it)
         }
 
         get<Routes.JanitorBackend.StylesCss> {
-            janitorBackendStyles()
+            janitorBackendStyles(call)
         }
 
         get<Routes.Api.Query> { queryInput ->
-            apiQuery(queryInput, markovChain)
+            apiQuery(call, queryInput, markovChain)
         }
 
         get<Routes.Lidlboards> {
-            lidlboards(latestTableValuesUpdateInstant, tableValues)
+            lidlboards(call, latestTableValuesUpdateInstant, tableValues)
         }
     }
 }

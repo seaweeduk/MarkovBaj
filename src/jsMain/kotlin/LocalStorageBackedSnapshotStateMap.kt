@@ -26,7 +26,7 @@ class LocalStorageBackedSnapshotStateMap<KeyType, ValueType>(
     }
 }
 
-inline fun <reified KeyType, ValueType> LocalStorageBackedSnapshotStateMap(localStorageKey: String): LocalStorageBackedSnapshotStateMap<KeyType, ValueType> {
+inline fun <reified KeyType, reified ValueType> LocalStorageBackedSnapshotStateMap(localStorageKey: String): LocalStorageBackedSnapshotStateMap<KeyType, ValueType> {
     val backingMap: SnapshotStateMap<KeyType, ValueType> =
         window.localStorage[localStorageKey]?.let { serializedMap ->
             mutableStateMapOf<KeyType, ValueType>().apply {

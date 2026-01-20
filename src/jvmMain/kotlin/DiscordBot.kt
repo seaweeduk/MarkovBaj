@@ -12,12 +12,12 @@ import dev.kord.gateway.Intent
 import dev.kord.gateway.Intents
 import dev.kord.gateway.PrivilegedIntent
 import dev.kord.rest.builder.interaction.string
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
-import mu.KotlinLogging
 import kotlin.time.Duration.Companion.seconds
 
 private val logger = KotlinLogging.logger("MarkovBaj:Discord")
@@ -82,7 +82,7 @@ suspend fun setupDiscordBot(markovChain: MarkovChain<String?>) {
         launch {
             login {
                 @OptIn(PrivilegedIntent::class)
-                intents = Intents.nonPrivileged + Intent.MessageContent
+                intents += Intent.MessageContent
             }
         }
     }

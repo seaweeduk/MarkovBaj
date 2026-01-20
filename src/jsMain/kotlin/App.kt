@@ -13,7 +13,7 @@ import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.datetime.Clock
+import kotlin.time.Clock
 import org.jetbrains.compose.web.css.Style
 import org.jetbrains.compose.web.dom.Div
 import org.w3c.dom.HTMLElement
@@ -161,7 +161,7 @@ fun App() {
                     talking = true
 
                     if (ttsResponse != null) {
-                        val audio = Audio(URL.createObjectURL(Blob(arrayOf(ttsResponse.readBytes()), BlobPropertyBag(type = "audio/mpeg"))))
+                        val audio = Audio(URL.createObjectURL(Blob(arrayOf(ttsResponse.readRawBytes()), BlobPropertyBag(type = "audio/mpeg"))))
 
                         suspendCoroutine {
                             var cancelled = false

@@ -113,17 +113,13 @@ fun ChatMessages(
                             gridColumn((1 + (i / 2) * 2).toString())
                             gridRow((1 + (i % 2) * 2).toString())
 
-                            transform {
-                                rotate(
-                                    when (i) {
-                                        0 -> 90.deg
-                                        1 -> 0.deg
-                                        2 -> 180.deg
-                                        3 -> 270.deg
-                                        else -> error("Unreachable")
-                                    }
-                                )
-                            }
+                            property("transform", when (i) {
+                                0 -> "rotate(90deg)"
+                                1 -> "rotate(0deg)"
+                                2 -> "rotate(180deg)"
+                                3 -> "rotate(270deg)"
+                                else -> error("Unreachable")
+                            })
                         }
                     }
                 )

@@ -7,7 +7,7 @@ import Styles
 import achievements
 import androidx.compose.runtime.*
 import kotlinx.browser.window
-import kotlinx.datetime.Instant
+import kotlin.time.Instant
 import org.jetbrains.compose.web.attributes.ATarget
 import org.jetbrains.compose.web.attributes.Draggable
 import org.jetbrains.compose.web.attributes.target

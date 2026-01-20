@@ -6,5 +6,6 @@ pluginManagement {
 
         kotlin("multiplatform") version kotlinVersion
         kotlin("plugin.serialization") version kotlinVersion
+        kotlin("plugin.compose") version kotlinVersion
     }
 }

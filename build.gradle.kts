@@ -1,5 +1,3 @@
-import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
-
 plugins {
     kotlin("multiplatform")
 
@@ -7,11 +5,11 @@ plugins {
     kotlin("plugin.serialization")
 
     // JVM Backend (Bot + Janitor Backend + REST API)
-    id("com.github.johnrengelman.shadow") version "7.1.2"
-    application
+    id("com.gradleup.shadow") version "8.3.5"
 
     // Website Frontend
-    id("org.jetbrains.compose") version "1.5.11"
+    id("org.jetbrains.compose") version "1.10.0"
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 group = "marczeugs.markovbaj"
@@ -21,9 +19,6 @@ repositories {
     google()
     mavenCentral()
     maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
-
-    // Kord snapshots
-    maven("https://oss.sonatype.org/content/repositories/snapshots")
 }
 
 val buildInfoGenerator by tasks.registering(Sync::class) {
@@ -47,15 +42,9 @@ tasks.build {
     dependsOn(buildInfoGenerator)
 }
 
-tasks.compileJava {
-    targetCompatibility = "17"
-}
-
-tasks.withType<KotlinCompile> {
-    kotlinOptions.jvmTarget = "17"
-}
-
 kotlin {
+    jvmToolchain(21)
+
     js(IR) {
         browser {
             commonWebpackConfig {
@@ -67,12 +56,11 @@ kotlin {
     }
 
     jvm {
-        withJava()
-        attributes.attribute(Attribute.of("dummy", String::class.java), "KT-55751")
+        @OptIn(org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi::class)
+        mainRun {
+            mainClass.set("MarkovBajKt")
+        }
     }
-
-    jvm("jvmScripts")
-
 
     val kotlinVersion: String by project
     val ktorVersion: String by project
@@ -80,14 +68,14 @@ kotlin {
     val kotlinXSerializationVersion: String by project
     val kotlinXCoroutinesVersion: String by project
     val kordVersion: String by project
+    val composeVersion: String by project
 
     sourceSets {
         all {
             languageSettings.apply {
                 optIn("kotlinx.serialization.ExperimentalSerializationApi")
-                optIn("kotlin.time.ExperimentalTime")
                 optIn("kotlin.ExperimentalStdlibApi")
-                optIn("org.jetbrains.compose.web.ExperimentalComposeWebApi")
+                optIn("kotlin.time.ExperimentalTime")
             }
         }
 
@@ -95,17 +83,17 @@ kotlin {
             kotlin.srcDir(buildInfoGenerator.map { it.destinationDir })
 
             dependencies {
-                implementation("io.github.microutils:kotlin-logging:2.1.23")
+                implementation("io.github.oshai:kotlin-logging:7.0.14")
 
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:$kotlinXSerializationVersion")
-                implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.4.0")
+                implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.7.1")
             }
         }
 
         val jsMain by getting {
             dependencies {
-                implementation(compose.html.core)
-                implementation(compose.runtime)
+                implementation("org.jetbrains.compose.html:html-core:$composeVersion")
+                implementation("org.jetbrains.compose.runtime:runtime:$composeVersion")
 
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:$kotlinXCoroutinesVersion")
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:$kotlinXSerializationVersion")
@@ -119,26 +107,21 @@ kotlin {
 
         val jvmMain by getting {
             dependencies {
-                implementation(compose.html.core)
-                implementation(compose.runtime)
+                implementation("org.jetbrains.compose.html:html-core:$composeVersion")
+                implementation("org.jetbrains.compose.runtime:runtime:$composeVersion")
 
                 implementation("org.jetbrains.kotlin:kotlin-reflect:$kotlinVersion")
 
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:$kotlinXCoroutinesVersion")
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:$kotlinXSerializationVersion")
 
-                implementation(files("lib/JRAW-1.1.0.jar"))
-                implementation("com.squareup.okhttp3:okhttp:4.10.0")
-                implementation("com.squareup.moshi:moshi:1.13.0")
-
-                implementation("org.slf4j:slf4j-api:2.0.0")
-                implementation("org.slf4j:slf4j-simple:2.0.0")
+                implementation("org.slf4j:slf4j-api:2.0.17")
+                implementation("org.slf4j:slf4j-simple:2.0.17")
 
                 implementation("io.ktor:ktor-server-core:$ktorVersion")
                 implementation("io.ktor:ktor-server-cio:$ktorVersion")
                 implementation("io.ktor:ktor-server-html-builder:$ktorVersion")
                 implementation("io.ktor:ktor-server-call-logging:$ktorVersion")
-                implementation("io.ktor:ktor-server-host-common:$ktorVersion")
                 implementation("io.ktor:ktor-server-status-pages:$ktorVersion")
                 implementation("io.ktor:ktor-server-sessions:$ktorVersion")
                 implementation("io.ktor:ktor-server-resources:$ktorVersion")
@@ -148,68 +131,38 @@ kotlin {
 
                 implementation("io.ktor:ktor-client-core:$ktorVersion")
                 implementation("io.ktor:ktor-client-cio:$ktorVersion")
+                implementation("io.ktor:ktor-client-content-negotiation:$ktorVersion")
+                implementation("io.ktor:ktor-client-auth:$ktorVersion")
+                implementation("io.ktor:ktor-serialization-kotlinx-json:$ktorVersion")
+                implementation("io.ktor:ktor-client-logging:$ktorVersion")
 
                 implementation("org.jetbrains.exposed:exposed-core:$exposedVersion")
                 implementation("org.jetbrains.exposed:exposed-jdbc:$exposedVersion")
                 implementation("org.jetbrains.exposed:exposed-kotlin-datetime:$exposedVersion")
                 implementation("org.jetbrains.exposed:exposed-json:$exposedVersion")
-                implementation("org.postgresql:postgresql:42.6.0")
+                implementation("org.postgresql:postgresql:42.7.9")
 
-                implementation("org.jetbrains.kotlinx:kotlinx-html:0.8.0")
-                implementation("org.jetbrains.kotlin-wrappers:kotlin-css:1.0.0-pre.463")
+                implementation("org.jetbrains.kotlinx:kotlinx-html:0.12.0")
+                implementation("org.jetbrains.kotlin-wrappers:kotlin-css:2026.1.10")
 
-                implementation("dev.kord:kord-core:$kordVersion") {
-                    capabilities {
-                        requireCapability("dev.kord:core-voice:$kordVersion")
-                    }
-                }
+                implementation("dev.kord:kord-core:$kordVersion")
 
-                implementation("com.github.twitch4j:twitch4j:1.12.0")
-            }
-        }
+                implementation("com.github.twitch4j:twitch4j:1.25.0")
 
-        val jvmScriptsMain by getting {
-            dependencies {
-                implementation(compose.html.core)
-                implementation(compose.runtime)
-
+                // For scripts
                 implementation(kotlin("script-runtime"))
-
-                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:$kotlinXCoroutinesVersion")
-                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:$kotlinXSerializationVersion")
-                implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.4.0")
-
-                implementation("io.github.microutils:kotlin-logging-jvm:2.1.23")
-                implementation("org.slf4j:slf4j-api:2.0.0")
-                implementation("org.slf4j:slf4j-simple:2.0.0")
-
-                implementation("io.ktor:ktor-client-core:$ktorVersion")
-                implementation("io.ktor:ktor-client-cio:$ktorVersion")
-                implementation("io.ktor:ktor-client-logging:$ktorVersion")
-                implementation("io.ktor:ktor-client-content-negotiation:$ktorVersion")
-                implementation("io.ktor:ktor-serialization-kotlinx-json:$ktorVersion")
             }
         }
     }
 }
 
-// Builds in Gradle 8.0+ fail without this because the `jvm` and `jvmScripts` derived configurations have the same attributes
-configurations {
-    val dummyAttribute = Attribute.of("dummy", String::class.java)
-
-    getByName("jvmScriptsApiElements") {
-        attributes {
-            attribute(dummyAttribute, "dummy")
-        }
+// Shadow JAR configuration for the JVM target
+tasks.register<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar") {
+    archiveBaseName.set("MarkovBaj")
+    archiveClassifier.set("")
+    manifest {
+        attributes["Main-Class"] = "MarkovBajKt"
     }
-
-    getByName("jvmScriptsRuntimeElements") {
-        attributes {
-            attribute(dummyAttribute, "dummy1")
-        }
-    }
-}
-
-application {
-    mainClass.set("MarkovBajKt")
+    from(kotlin.jvm().compilations.getByName("main").output)
+    configurations = listOf(project.configurations.getByName("jvmRuntimeClasspath"))
 }

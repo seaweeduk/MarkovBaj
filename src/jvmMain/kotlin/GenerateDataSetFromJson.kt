@@ -1,6 +1,6 @@
 package scripts
 
-import kotlinx.datetime.Instant
+import kotlinx.serialization.Contextual
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -12,7 +12,7 @@ data class Comment(
     val id: String,
     val author: String,
     val content: String,
-    val posted: Instant
+    @Contextual val posted: kotlin.time.Instant
 )
 
 fun main() {

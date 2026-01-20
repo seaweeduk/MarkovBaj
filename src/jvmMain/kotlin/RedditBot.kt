@@ -1,102 +1,94 @@
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.datetime.Clock
-import kotlinx.datetime.toKotlinInstant
-import mu.KotlinLogging
-import net.dean.jraw.RedditClient
-import net.dean.jraw.http.OkHttpNetworkAdapter
-import net.dean.jraw.http.UserAgent
-import net.dean.jraw.models.SubredditSort
-import net.dean.jraw.oauth.Credentials
-import net.dean.jraw.oauth.OAuthHelper
-import net.dean.jraw.references.PublicContributionReference
+
+import reddit.RedditApiClient
+import reddit.createRedditClient
 import kotlin.concurrent.fixedRateTimer
 import kotlin.time.Duration.Companion.hours
 
 private val logger = KotlinLogging.logger("MarkovBaj:Reddit")
 
-fun setupRedditClient(): RedditClient {
-    val redditBotCredentials = Credentials.script(
+suspend fun setupRedditClient(): RedditApiClient {
+    val redditClient = createRedditClient(
         username = RuntimeVariables.Reddit.botUsername,
         password = RuntimeVariables.Reddit.botPassword,
         clientId = RuntimeVariables.Reddit.botClientId,
-        clientSecret = RuntimeVariables.Reddit.botClientSecret
-    )
-
-    val userAgent = UserAgent(
-        platform = "JVM/JRAW",
+        clientSecret = RuntimeVariables.Reddit.botClientSecret,
         appId = RuntimeVariables.Reddit.botAppId,
         version = BuildInfo.PROJECT_VERSION,
-        redditUsername = RuntimeVariables.Reddit.botAuthorRedditUsername
+        authorUsername = RuntimeVariables.Reddit.botAuthorRedditUsername
     )
 
-    val redditClient = OAuthHelper.automatic(OkHttpNetworkAdapter(userAgent), redditBotCredentials).apply {
-        logHttp = false
-    }
-
-    logger.info("Connected to Reddit.")
+    redditClient.authenticate()
+    logger.info { "Connected to Reddit." }
 
     return redditClient
 }
 
-suspend fun setupRedditBot(redditClient: RedditClient, markovChain: MarkovChain<String?>, eventFlow: MutableSharedFlow<ApiEvent>) = coroutineScope {
-    val activeSubreddit = redditClient.subreddit(RuntimeVariables.Reddit.activeSubreddit)
-
+suspend fun setupRedditBot(redditClient: RedditApiClient, markovChain: MarkovChain<String?>, eventFlow: MutableSharedFlow<ApiEvent>) = coroutineScope {
     var alreadyProcessedPostIds = listOf<String>()
     var alreadyProcessedCommentsIds = listOf<String>()
 
-    logger.info("Bot running.")
+    logger.info { "Bot running." }
 
     fixedRateTimer(period = RuntimeVariables.Reddit.checkInterval.inWholeMilliseconds) {
         launch {
             try {
-                val newInboxMessages = redditClient.me()
-                    .inbox()
-                    .iterate("unread")
-                    .build()
-                    .accumulateMerged(1)
+                logger.debug { "Timer loop starting - fetching unread messages..." }
+                val newInboxMessages = redditClient.getUnreadMessages(limit = 25)
                     .filter {
                         it.subject == "username mention" ||
                         it.subject.startsWith("comment reply") && CommonConstants.triggerKeyword.lowercase() in it.body.lowercase() && it.subreddit != RuntimeVariables.Reddit.activeSubreddit
                     }
+                logger.debug { "Fetched ${newInboxMessages.size} relevant inbox messages" }
 
-                val newPosts = activeSubreddit.posts()
-                    .sorting(SubredditSort.NEW)
-                    .limit(100)
-                    .build()
-                    .accumulateMerged(1)
-                    .filter { it.created.toInstant().toKotlinInstant() > Clock.System.now() - RuntimeVariables.Reddit.checkInterval * 5 && it.id !in alreadyProcessedPostIds }
+                logger.debug { "Fetching subreddit posts..." }
+                val checkIntervalMs = RuntimeVariables.Reddit.checkInterval.inWholeMilliseconds
+                val newPosts = redditClient.getSubredditPosts(
+                    subreddit = RuntimeVariables.Reddit.activeSubreddit,
+                    sort = "new",
+                    limit = 100
+                ).filter { 
+                    val createdInstant = kotlin.time.Instant.fromEpochSeconds(it.createdUtc.toLong())
+                    val cutoffTime = kotlin.time.Clock.System.now() - RuntimeVariables.Reddit.checkInterval * 5
+                    createdInstant > cutoffTime && it.id !in alreadyProcessedPostIds 
+                }
+                logger.debug { "Fetched ${newPosts.size} new posts" }
 
-                val newComments = activeSubreddit.comments()
-                    .limit(100)
-                    .build()
-                    .accumulateMerged(1)
-                    .filter {
-                        it.created.toInstant().toKotlinInstant() > Clock.System.now() - RuntimeVariables.Reddit.checkInterval * 2 &&
-                        it.id !in alreadyProcessedCommentsIds &&
-                        it.id !in newInboxMessages.filter { message -> message.subreddit == RuntimeVariables.Reddit.activeSubreddit }.map { message -> message.id }
-                    }
+                logger.debug { "Fetching subreddit comments..." }
+                val newComments = redditClient.getSubredditComments(
+                    subreddit = RuntimeVariables.Reddit.activeSubreddit,
+                    limit = 100
+                ).filter {
+                    val createdInstant = kotlin.time.Instant.fromEpochSeconds(it.createdUtc.toLong())
+                    val cutoffTime = kotlin.time.Clock.System.now() - RuntimeVariables.Reddit.checkInterval * 2
+                    createdInstant > cutoffTime &&
+                    it.id !in alreadyProcessedCommentsIds &&
+                    it.id !in newInboxMessages.filter { message -> message.subreddit == RuntimeVariables.Reddit.activeSubreddit }.map { message -> message.id }
+                }
+                logger.debug { "Fetched ${newComments.size} new comments - timer loop API calls completed" }
 
-                logger.info("${newInboxMessages.size} new mention(s), ${newPosts.size} new post(s), ${newComments.size} new comment(s).")
+                logger.info { "${newInboxMessages.size} new mention(s), ${newPosts.size} new post(s), ${newComments.size} new comment(s)." }
 
                 eventFlow.tryEmit(
                     ApiEvent.CommentsCollected(
                         comments = newComments.map { comment ->
                             ApiEvent.CommentsCollected.Comment(
                                 id = comment.id,
-                                created = comment.created.toInstant().toKotlinInstant(),
+                                created = kotlin.time.Instant.fromEpochSeconds(comment.createdUtc.toLong()),
                                 author = comment.author,
                                 body = comment.body,
                                 url = comment.url,
                                 authorFlairText = comment.authorFlairText,
                                 submissionFullName = comment.submissionFullName,
                                 submissionTitle = comment.submissionTitle,
-                                subredditType = comment.subredditType.name,
-                                distinguished = comment.distinguished.name,
+                                subredditType = comment.subredditType ?: "public",
+                                distinguished = comment.distinguished ?: "none",
                                 fullName = comment.fullName,
                                 parentFullName = comment.parentFullName,
                                 subredditFullName = comment.subredditFullName,
@@ -109,8 +101,8 @@ suspend fun setupRedditBot(redditClient: RedditClient, markovChain: MarkovChain<
                     ApiEvent.SubmissionsCollected(
                         submissions = newPosts.map { post ->
                             ApiEvent.SubmissionsCollected.Submission(
-                                created = post.created.toInstant().toKotlinInstant(),
-                                distinguished = post.distinguished.name,
+                                created = kotlin.time.Instant.fromEpochSeconds(post.createdUtc.toLong()),
+                                distinguished = post.distinguished ?: "none",
                                 id = post.id,
                                 author = post.author,
                                 body = post.body,
@@ -118,7 +110,7 @@ suspend fun setupRedditBot(redditClient: RedditClient, markovChain: MarkovChain<
                                 url = post.url,
                                 authorFlairText = post.authorFlairText,
                                 domain = post.domain,
-                                embeddedMedia = post.embeddedMedia != null,
+                                embeddedMedia = post.embeddedMedia,
                                 isNsfw = post.isNsfw,
                                 isSelfPost = post.isSelfPost,
                                 isSpoiler = post.isSpoiler,
@@ -126,8 +118,8 @@ suspend fun setupRedditBot(redditClient: RedditClient, markovChain: MarkovChain<
                                 linkFlairText = post.linkFlairText,
                                 permalink = post.permalink,
                                 postHint = post.postHint,
-                                preview = post.preview != null,
-                                selfText = post.selfText,
+                                preview = post.hasPreview,
+                                selfText = post.selftext,
                                 thumbnail = post.thumbnail,
                                 fullName = post.fullName,
                                 subreddit = post.subreddit,
@@ -145,12 +137,12 @@ suspend fun setupRedditBot(redditClient: RedditClient, markovChain: MarkovChain<
                 if (RuntimeVariables.Reddit.answerMentions) {
                     for (message in newInboxMessages) {
                         if (commentCounter >= RuntimeVariables.Reddit.maxCommentsPerCheck) {
-                            logger.warn("Hit comment limit, not posting any more replies.")
+                            logger.warn { "Hit comment limit, not posting any more replies." }
                             return@launch
                         }
 
                         if (!message.isComment) {
-                            logger.warn("Username mention with id ${message.id} was not a comment, skipping...")
+                            logger.warn { "Username mention with id ${message.id} was not a comment, skipping..." }
                             return@launch
                         }
 
@@ -163,16 +155,16 @@ suspend fun setupRedditBot(redditClient: RedditClient, markovChain: MarkovChain<
                         }
 
                         val actualReply = if (relatedReply != null) {
-                            logger.info("Replying to mention by ${message.author} in message ${message.id} in ${message.subreddit?.let { "r/$it" } ?: "-"} ('${message.body}') with related answer...")
+                            logger.info { "Replying to mention by ${message.author} in message ${message.id} in ${message.subreddit?.let { "r/$it" } ?: "-"} ('${message.body}') with related answer..." }
                             relatedReply
                         } else {
                             markovChain.generateRandomReply().also {
-                                logger.info("Default replying to mention by ${message.author} in message ${message.id} in ${message.subreddit?.let { "r/$it" } ?: "-"} ('${message.body}')...")
+                                logger.info { "Default replying to mention by ${message.author} in message ${message.id} in ${message.subreddit?.let { "r/$it" } ?: "-"} ('${message.body}')..." }
                             }
                         }
 
-                        redditClient.comment(message.id).safeReply(actualReply)
-                        redditClient.me().inbox().markRead(true, message.fullName)
+                        safeReply(redditClient, message.fullName, actualReply)
+                        redditClient.markMessagesRead(message.fullName)
                         commentCounter++
 
                         delay(RuntimeVariables.Reddit.delayBetweenComments)
@@ -181,7 +173,7 @@ suspend fun setupRedditBot(redditClient: RedditClient, markovChain: MarkovChain<
 
                 for (post in newPosts) {
                     if (commentCounter >= RuntimeVariables.Reddit.maxCommentsPerCheck) {
-                        logger.warn("Hit comment limit, not posting any more replies.")
+                        logger.warn { "Hit comment limit, not posting any more replies." }
                         return@launch
                     }
 
@@ -199,15 +191,15 @@ suspend fun setupRedditBot(redditClient: RedditClient, markovChain: MarkovChain<
                         }
 
                         val actualReply = if (relatedReply != null) {
-                            logger.info("Replying to post ${post.id} ('${post.title}') with related answer...")
+                            logger.info { "Replying to post ${post.id} ('${post.title}') with related answer..." }
                             relatedReply
                         } else {
                             markovChain.generateRandomReply().also {
-                                logger.info("Default replied to post ${post.id} ('${post.title}')...")
+                                logger.info { "Default replied to post ${post.id} ('${post.title}')..." }
                             }
                         }
 
-                        post.toReference(redditClient).safeReply(actualReply)
+                        safeReply(redditClient, post.fullName, actualReply)
                         commentCounter++
 
                         delay(RuntimeVariables.Reddit.delayBetweenComments)
@@ -216,7 +208,7 @@ suspend fun setupRedditBot(redditClient: RedditClient, markovChain: MarkovChain<
 
                 for (comment in newComments) {
                     if (commentCounter >= RuntimeVariables.Reddit.maxCommentsPerCheck) {
-                        logger.warn("Hit comment limit, not posting any more replies.")
+                        logger.warn { "Hit comment limit, not posting any more replies." }
                         return@launch
                     }
 
@@ -234,22 +226,22 @@ suspend fun setupRedditBot(redditClient: RedditClient, markovChain: MarkovChain<
                         }
 
                         val actualReply = if (relatedReply != null) {
-                            logger.info("Replying to comment ${comment.id} ('${comment.body}') with related answer...")
+                            logger.info { "Replying to comment ${comment.id} ('${comment.body}') with related answer..." }
                             relatedReply
                         } else {
                             markovChain.generateRandomReply().also {
-                                logger.info("Default replying to comment ${comment.id} ('${comment.body}')...")
+                                logger.info { "Default replying to comment ${comment.id} ('${comment.body}')..." }
                             }
                         }
 
-                        comment.toReference(redditClient).safeReply(actualReply)
+                        safeReply(redditClient, comment.fullName, actualReply)
                         commentCounter++
 
                         delay(RuntimeVariables.Reddit.delayBetweenComments)
                     }
                 }
             } catch (e: Exception) {
-                logger.error("Error while running timer loop:", e)
+                logger.error(e) { "Error while running timer loop" }
             }
         }
     }
@@ -262,15 +254,19 @@ suspend fun setupRedditBot(redditClient: RedditClient, markovChain: MarkovChain<
     }
 }
 
-private fun PublicContributionReference.safeReply(text: String) {
+private suspend fun safeReply(redditClient: RedditApiClient, parentFullname: String, text: String) {
     if (RuntimeVariables.Reddit.actuallySendReplies) {
         try {
-            reply(text.take(5000))
-            logger.info("Replied with '${text.take(5000)}'.")
+            val success = redditClient.reply(parentFullname, text.take(5000))
+            if (success) {
+                logger.info { "Replied with '${text.take(5000)}'." }
+            } else {
+                logger.error { "Reply failed (API returned error)." }
+            }
         } catch (e: Exception) {
-            logger.error("Reply failed:", e)
+            logger.error(e) { "Reply failed" }
         }
     } else {
-        logger.info("[NOT ACTUALLY REPLYING] Would have replied with '$text'.")
+        logger.info { "[NOT ACTUALLY REPLYING] Would have replied with '$text'." }
     }
 }
