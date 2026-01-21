@@ -166,6 +166,25 @@ data class RedditCommentResponseData(
     val things: List<RedditThing<RedditComment>> = emptyList()
 )
 
+// === API Error Types ===
+data class RedditApiError(
+    val errorType: String,
+    val message: String,
+    val field: String?
+)
+
+sealed class ReplyResult {
+    data class Success(val commentFullname: String?) : ReplyResult()
+    data class RateLimited(val waitSeconds: Int, val message: String) : ReplyResult()
+    data class Failed(val errors: List<RedditApiError>) : ReplyResult()
+}
+
+data class RateLimitInfo(
+    val remaining: Double?,
+    val used: Int?,
+    val resetSeconds: Int?
+)
+
 // === API Response for info lookup ===
 @Serializable
 data class RedditInfoResponse(

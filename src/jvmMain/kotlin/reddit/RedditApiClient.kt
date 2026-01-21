@@ -12,6 +12,7 @@ import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -70,6 +71,8 @@ class RedditApiClient(
     private var accessToken: String? = null
     private var tokenExpiration: kotlin.time.Instant = kotlin.time.Instant.DISTANT_PAST
     private val tokenMutex = Mutex()
+    private val rateLimitRegex = Regex("""(\d+)\s*(minute|second|millisecond)s?""", RegexOption.IGNORE_CASE)
+    private var lastRateLimitInfo: RateLimitInfo? = null
 
     // === Authentication ===
 
@@ -130,39 +133,88 @@ class RedditApiClient(
 
     private suspend fun authorizedRequest(
         operationName: String = "unknown",
+        maxRetries: Int = 2,
         block: HttpRequestBuilder.() -> Unit
     ): HttpResponse {
-        ensureAuthenticated()
-        
-        logger.debug { "[$operationName] Starting request..." }
-        
         var requestUrl = "unknown"
-        return try {
-            val (response, duration) = measureTimedValue {
-                httpClient.request {
-                    header("Authorization", "Bearer $accessToken")
-                    block()
-                    requestUrl = url.buildString()
-                    println("DEBUG [$operationName] Request URL: $requestUrl")
-                    logger.info { "[$operationName] Request URL: $requestUrl" }
+        var lastException: Exception? = null
+
+        for (attempt in 0..maxRetries) {
+            ensureAuthenticated()
+            logger.debug { "[$operationName] Starting request (attempt ${attempt + 1}/${maxRetries + 1})..." }
+
+            try {
+                val (response, duration) = measureTimedValue {
+                    httpClient.request {
+                        header("Authorization", "Bearer $accessToken")
+                        block()
+                        requestUrl = url.buildString()
+                        println("DEBUG [$operationName] Request URL: $requestUrl")
+                        logger.info { "[$operationName] Request URL: $requestUrl" }
+                    }
                 }
+                logger.debug { "[$operationName] Completed in ${duration.inWholeMilliseconds}ms, status: ${response.status}" }
+                updateRateLimitInfo(response)
+
+                if (response.status.value in 500..599 && attempt < maxRetries) {
+                    val backoffSeconds = 1 shl attempt
+                    logger.warn { "[$operationName] Server error ${response.status}, retrying in ${backoffSeconds}s..." }
+                    delay(backoffSeconds.seconds)
+                    continue
+                }
+
+                return response
+            } catch (e: io.ktor.client.plugins.HttpRequestTimeoutException) {
+                lastException = e
+                if (attempt < maxRetries) {
+                    val backoffSeconds = 1 shl attempt
+                    logger.warn { "[$operationName] Request timeout to $requestUrl, retrying in ${backoffSeconds}s..." }
+                    delay(backoffSeconds.seconds)
+                    continue
+                }
+                logger.error { "[$operationName] Request timeout to $requestUrl" }
+                throw e
+            } catch (e: java.net.ConnectException) {
+                logger.error { "[$operationName] Connection refused to $requestUrl - is the network available? Host may be unreachable." }
+                throw e
+            } catch (e: java.net.UnknownHostException) {
+                logger.error { "[$operationName] DNS resolution failed to $requestUrl - check network/DNS settings" }
+                throw e
+            } catch (e: Exception) {
+                logger.error { "[$operationName] Request failed to $requestUrl: ${e::class.simpleName} - ${e.message}" }
+                throw e
             }
-            logger.debug { "[$operationName] Completed in ${duration.inWholeMilliseconds}ms, status: ${response.status}" }
-            response
-        } catch (e: java.net.ConnectException) {
-            logger.error { "[$operationName] Connection refused to $requestUrl - is the network available? Host may be unreachable." }
-            throw e
-        } catch (e: java.net.UnknownHostException) {
-            logger.error { "[$operationName] DNS resolution failed to $requestUrl - check network/DNS settings" }
-            throw e
-        } catch (e: io.ktor.client.plugins.HttpRequestTimeoutException) {
-            logger.error { "[$operationName] Request timeout to $requestUrl" }
-            throw e
-        } catch (e: Exception) {
-            logger.error { "[$operationName] Request failed to $requestUrl: ${e::class.simpleName} - ${e.message}" }
-            throw e
+        }
+
+        throw lastException ?: IllegalStateException("[$operationName] Request failed after retries")
+    }
+
+    private fun updateRateLimitInfo(response: HttpResponse) {
+        val remainingHeader = response.headers["x-ratelimit-remaining"]
+        if (remainingHeader == null) {
+            val previous = lastRateLimitInfo
+            if (previous?.remaining != null && previous.used != null) {
+                val nextRemaining = (previous.remaining - 1).coerceAtLeast(0.0)
+                val nextUsed = previous.used + 1
+                lastRateLimitInfo = previous.copy(remaining = nextRemaining, used = nextUsed)
+            }
+            return
+        }
+
+        val rateLimitInfo = RateLimitInfo(
+            remaining = remainingHeader.toDoubleOrNull(),
+            used = response.headers["x-ratelimit-used"]?.toIntOrNull(),
+            resetSeconds = response.headers["x-ratelimit-reset"]?.toIntOrNull()
+        )
+        lastRateLimitInfo = rateLimitInfo
+
+        val remaining = rateLimitInfo.remaining
+        if (remaining != null && remaining < 10) {
+            logger.warn { "Rate limit low: ${"%.2f".format(remaining)} remaining, resets in ${rateLimitInfo.resetSeconds}s" }
         }
     }
+
+    fun getRateLimitInfo(): RateLimitInfo? = lastRateLimitInfo
 
     // === User Info ===
 
@@ -247,28 +299,76 @@ class RedditApiClient(
      * @param parentFullname The fullname of the parent (t1_ for comment, t3_ for submission)
      * @param text The reply text
      */
-    suspend fun reply(parentFullname: String, text: String): Boolean {
+    suspend fun reply(parentFullname: String, text: String, maxRetryWaitSeconds: Int = 300): Boolean {
         return try {
-            val response = authorizedRequest("reply($parentFullname)") {
-                method = HttpMethod.Post
-                url.takeFrom("https://oauth.reddit.com/api/comment")
-                setBody(FormDataContent(parameters {
-                    append("thing_id", parentFullname)
-                    append("text", text)
-                    append("api_type", "json")
-                }))
+            repeat(3) { attempt ->
+                when (val result = tryReplyOnce(parentFullname, text)) {
+                    is ReplyResult.Success -> return true
+                    is ReplyResult.RateLimited -> {
+                        val waitSeconds = result.waitSeconds.coerceAtLeast(1)
+                        if (waitSeconds <= maxRetryWaitSeconds) {
+                            logger.warn { "Rate limited, waiting ${waitSeconds}s (attempt ${attempt + 1}/3)" }
+                            delay((waitSeconds + 1).seconds)
+                        } else {
+                            logger.error { "Rate limit wait ${waitSeconds}s exceeds max ${maxRetryWaitSeconds}s" }
+                            return false
+                        }
+                    }
+                    is ReplyResult.Failed -> {
+                        logger.error { "Reply failed: ${result.errors}" }
+                        return false
+                    }
+                }
             }
-
-            val result = response.body<RedditCommentResponse>()
-            if (result.json.errors.isNotEmpty()) {
-                logger.error { "Reply failed with errors: ${result.json.errors}" }
-                false
-            } else {
-                true
-            }
+            false
         } catch (e: Exception) {
             logger.error(e) { "Failed to post reply" }
             false
+        }
+    }
+
+    private suspend fun tryReplyOnce(parentFullname: String, text: String): ReplyResult {
+        val response = authorizedRequest("reply($parentFullname)") {
+            method = HttpMethod.Post
+            url.takeFrom("https://oauth.reddit.com/api/comment")
+            setBody(FormDataContent(parameters {
+                append("thing_id", parentFullname)
+                append("text", text)
+                append("api_type", "json")
+            }))
+        }
+
+        val result = response.body<RedditCommentResponse>()
+        val errors = result.json.errors.map { error ->
+            RedditApiError(
+                errorType = error.getOrNull(0) ?: "UNKNOWN",
+                message = error.getOrNull(1) ?: "",
+                field = error.getOrNull(2)
+            )
+        }
+
+        val rateLimitError = errors.firstOrNull { it.errorType.equals("RATELIMIT", ignoreCase = true) }
+        if (rateLimitError != null) {
+            val waitSeconds = parseRateLimitSeconds(rateLimitError.message)
+            return ReplyResult.RateLimited(waitSeconds, rateLimitError.message)
+        }
+
+        if (errors.isNotEmpty()) {
+            return ReplyResult.Failed(errors)
+        }
+
+        val commentFullname = result.json.data?.things?.firstOrNull()?.data?.fullName
+        return ReplyResult.Success(commentFullname)
+    }
+
+    private fun parseRateLimitSeconds(message: String): Int {
+        val match = rateLimitRegex.find(message) ?: return 60
+        val value = match.groupValues[1].toIntOrNull() ?: return 60
+        val unit = match.groupValues[2].lowercase()
+        return when {
+            unit.startsWith("minute") -> value * 60
+            unit.startsWith("millisecond") -> 1
+            else -> value
         }
     }
 
