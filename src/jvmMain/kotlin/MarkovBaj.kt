@@ -22,12 +22,14 @@ suspend fun main() = coroutineScope {
         ignoreUnknownKeys = true
     }
 
-    val markovChain = MarkovChain<String?>(CommonConstants.consideredValuesForGeneration) { it?.trim() }
+    val dataFilePath = System.getenv("markovbaj_datafile") ?: "data.json"
+    val dataFile = File(dataFilePath)
 
-    logger.info { "Building Markov chain..." }
+    val markovChain = MarkovChain<String?>(CommonConstants.consideredValuesForGeneration) { it?.trim() }
+    logger.info { "Building Markov chain from $dataFilePath..." }
 
     val chainBuildTime = measureTime {
-        readJsonStringArray(File("data.json")).forEach { message ->
+        readJsonStringArray(dataFile).forEach { message ->
             val wordParts = message.toWordParts()
             val chainStarts = listOf(
                 wordParts.take(CommonConstants.consideredValuesForGeneration),

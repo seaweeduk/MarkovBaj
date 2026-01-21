@@ -8,5 +8,6 @@ kotlin-js-store/
 out/
 data*.json
 comments/
+benchmarks/
 .env
 AGENTS.md
