@@ -8,7 +8,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.decodeFromStream
 import java.io.File
 import kotlin.time.DurationUnit
 import kotlin.time.measureTime
@@ -28,18 +27,14 @@ suspend fun main() = coroutineScope {
     logger.info { "Building Markov chain..." }
 
     val chainBuildTime = measureTime {
-        val messages = json.decodeFromStream<List<String>>(File("data.json").inputStream())
-        val messageData = messages.map { it.toWordParts() }
-
-        markovChain.addData(
-            messageData,
-            messageData.flatMap { values ->
-                listOf(
-                    values.take(CommonConstants.consideredValuesForGeneration),
-                    values.drop(1).take(CommonConstants.consideredValuesForGeneration)
-                )
-            }
-        )
+        readJsonStringArray(File("data.json")).forEach { message ->
+            val wordParts = message.toWordParts()
+            val chainStarts = listOf(
+                wordParts.take(CommonConstants.consideredValuesForGeneration),
+                wordParts.drop(1).take(CommonConstants.consideredValuesForGeneration),
+            )
+            markovChain.addData(listOf(wordParts), chainStarts)
+        }
     }
 
     logger.info { "Building the chain took ${chainBuildTime.toDouble(DurationUnit.SECONDS)}s." }

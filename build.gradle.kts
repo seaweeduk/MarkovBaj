@@ -25,12 +25,12 @@ val buildInfoGenerator by tasks.registering(Sync::class) {
     from(
         resources.text.fromString(
             """
-                object BuildInfo {
-                    const val PROJECT_VERSION = "${project.version}"
-                    const val PROJECT_BUILD_TIMESTAMP_MILLIS = ${System.currentTimeMillis()}
-                }
-            """.trimIndent()
-        )
+            object BuildInfo {
+                const val PROJECT_VERSION = "${project.version}"
+                const val PROJECT_BUILD_TIMESTAMP_MILLIS = ${System.currentTimeMillis()}
+            }
+            """.trimIndent(),
+        ),
     ) {
         rename { "BuildInfo.kt" }
     }
@@ -156,6 +156,13 @@ kotlin {
     }
 }
 
+tasks.withType<JavaExec>().configureEach {
+    if (name == "jvmRun" || name == "run") {
+        val runtimeXmx = System.getenv("MARKOVBAJ_XMX") ?: "1g"
+        jvmArgs("-Xmx$runtimeXmx", "-XX:+UseG1GC")
+    }
+}
+
 // Shadow JAR configuration for the JVM target
 tasks.register<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar") {
     archiveBaseName.set("MarkovBaj")
@@ -163,6 +170,12 @@ tasks.register<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shad
     manifest {
         attributes["Main-Class"] = "MarkovBajKt"
     }
-    from(kotlin.jvm().compilations.getByName("main").output)
+    from(
+        kotlin
+            .jvm()
+            .compilations
+            .getByName("main")
+            .output,
+    )
     configurations = listOf(project.configurations.getByName("jvmRuntimeClasspath"))
 }

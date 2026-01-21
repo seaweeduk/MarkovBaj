@@ -6,14 +6,26 @@ class MarkovChain<T>(private val consideredValuesForGeneration: Int, private val
         this.chainStarts.addData(chainStarts)
 
         data.forEach { sequence ->
-            (sequence + listOf(null)).windowed(consideredValuesForGeneration + 1).forEach { values ->
-                // Cast is always safe because sequence ending marker (null) is only added at the end and always dropped by `dropLast(1)`
-                @Suppress("UNCHECKED_CAST")
-                val consideredValues = values.dropLast(1).map { inputValueMapperFunction(it as T) }
+            if (sequence.size < consideredValuesForGeneration) {
+                return@forEach
+            }
 
-                val generatedValue = values.takeLast(1)
+            val lastStartIndex = sequence.size - consideredValuesForGeneration
+            for (startIndex in 0..lastStartIndex) {
+                val consideredValues = ArrayList<T>(consideredValuesForGeneration)
+                for (offset in 0 until consideredValuesForGeneration) {
+                    val value = sequence[startIndex + offset]
+                    consideredValues.add(inputValueMapperFunction(value))
+                }
 
-                followingValues.getOrPut(consideredValues) { WeightedSet() }.addData(generatedValue)
+                val nextIndex = startIndex + consideredValuesForGeneration
+                val generatedValue: T? = if (nextIndex < sequence.size) {
+                    sequence[nextIndex]
+                } else {
+                    null
+                }
+
+                followingValues.getOrPut(consideredValues) { WeightedSet() }.addData(listOf(generatedValue))
             }
         }
     }
@@ -30,9 +42,19 @@ class MarkovChain<T>(private val consideredValuesForGeneration: Int, private val
         val generatedValues = start.toMutableList()
 
         for (index in start.size..<maxLength) {
-            followingValues[generatedValues.slice((index - consideredValuesForGeneration)..<index).map { inputValueMapperFunction(it) }]?.randomValue()?.let {
-                generatedValues.add(it)
-            } ?: break
+            val windowStart = index - consideredValuesForGeneration
+            val consideredValues = ArrayList<T>(consideredValuesForGeneration)
+            for (offset in 0 until consideredValuesForGeneration) {
+                val value = generatedValues[windowStart + offset]
+                consideredValues.add(inputValueMapperFunction(value))
+            }
+
+            val nextValue = followingValues[consideredValues]?.randomValue()
+            if (nextValue != null) {
+                generatedValues.add(nextValue)
+            } else {
+                break
+            }
         }
 
         return generatedValues
